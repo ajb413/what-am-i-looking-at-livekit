@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LiveKit Vision</title>
+  <style>
+    body { margin: 0; min-height: 100dvh; background: #0b0b0f; color: #f2f2f5; font: 17px/1.4 system-ui, sans-serif;
+           display: flex; flex-direction: column; gap: 16px; padding: calc(16px + env(safe-area-inset-top)) 16px 24px; box-sizing: border-box; }
+    h1 { margin: 0; font-size: 22px; text-align: center; letter-spacing: .5px; }
+    video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 16px; background: #1c1c22; }
+    #out { min-height: 3em; padding: 14px 16px; border-radius: 14px; background: #1c1c22; text-align: center; }
+    .row { display: flex; gap: 12px; }
+    button { flex: 1; font: inherit; font-weight: 600; padding: 14px; border: 0; border-radius: 999px; background: #fff; color: #000; }
+    button.alt { background: #2a2a33; color: #fff; }
+    [hidden] { display: none; }
+    .panel { display: flex; flex-direction: column; gap: 16px; }
+
+    /* Landscape: square camera on the left, title/text/buttons on the right */
+    @media (orientation: landscape) {
+      body { display: grid; grid-template: auto 1fr / auto 1fr; gap: 12px 24px; height: 100dvh;
+             padding: 16px max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left)); }
+      video { grid-area: 1 / 1 / 3 / 2; width: auto; height: calc(100dvh - 32px); }
+      h1 { grid-area: 1 / 2; text-align: left; }
+      .panel { grid-area: 2 / 2; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <h1>LiveKit Vision</h1>
+  <video id="cam" autoplay playsinline muted></video>
+  <div class="panel">
+    <div id="out">Tap Start and point the camera at something.</div>
+    <div class="row">
+      <button id="start">Start</button>
+      <button id="stop" class="alt" hidden>Stop</button>
+      <button id="mute" class="alt" hidden>Mute</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.24.1/dist/livekit-client.umd.min.js"></script>
+  <script>
+    const { Room, RoomEvent, Track, createLocalVideoTrack } = LivekitClient;
+    const $ = (id) => document.getElementById(id);
+    let room, cam, muted = false;
+
+    const show = (running) => { $('start').hidden = running; $('stop').hidden = $('mute').hidden = !running; };
+
+    $('start').onclick = async () => {
+      $('out').textContent = 'Connecting...';
+      room = new Room();
+      room.startAudio(); // unlock audio on iOS within the tap
+
+      // Agent text and voice
+      room.registerTextStreamHandler('vision', async (reader) => { $('out').textContent = await reader.readAll(); });
+      room.on(RoomEvent.TrackSubscribed, (track) => {
+        if (track.kind === Track.Kind.Audio) { const el = track.attach(); el.muted = muted; document.body.append(el); }
+      });
+      room.on(RoomEvent.ParticipantDisconnected, () => stop('Session ended (time limit).')); // agent left
+
+      const { url, token } = await (await fetch('/token')).json();
+      await room.connect(url, token);
+      room.localParticipant.setAttributes({ muted: String(muted) });
+      cam = await createLocalVideoTrack({ facingMode: 'environment', resolution: { width: 1280, height: 720 } });
+      cam.attach($('cam'));
+      await room.localParticipant.publishTrack(cam);
+      $('out').textContent = 'Looking...';
+      show(true);
+    };
+
+    const stop = async (msg) => {
+      cam.stop(); cam.detach();
+      await room.disconnect();
+      document.querySelectorAll('audio').forEach((el) => el.remove());
+      $('out').textContent = msg;
+      show(false);
+    };
+    $('stop').onclick = () => stop('Stopped.');
+
+    // Mute local playback and tell the agent to skip speech
+    $('mute').onclick = () => {
+      muted = !muted;
+      $('mute').textContent = muted ? 'Unmute' : 'Mute';
+      document.querySelectorAll('audio').forEach((el) => (el.muted = muted));
+      room.localParticipant.setAttributes({ muted: String(muted) });
+    };
+  </script>
+</body>
+</html>
